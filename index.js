@@ -68,7 +68,7 @@ const CFG = {
   premiumVideoHeight: Number(process.env.PREMIUM_VIDEO_HEIGHT || 720),
   premiumVideoFocusX: Number(process.env.PREMIUM_VIDEO_FOCUS_X || 0.5),
   // Smart Auto-Framing: aim for 85% canvas height, while limiting side crop on landscape sources.
-  smartFrameHeightRatio: Math.max(0.70, Math.min(0.90, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 0.85))),
+  smartFrameHeightRatio: Math.max(0.70, Math.min(0.90, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 0.90))),
   smartFrameMaxLandscapeCrop: Math.max(0.15, Math.min(0.55, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.38))),
 
   subtitleMarginV: Number(process.env.SUBTITLE_MARGIN_V || 280),
@@ -805,17 +805,69 @@ function sanitizeHookCandidate(value) {
   return text;
 }
 
+function dynamicHookFromContext(clip, words, channel) {
+  const context = [
+    clip?.title, clip?.reason, clip?.hookReason,
+    clip?.judge?.primaryReason, clip?.editorialValue?.reasons?.join(" "),
+    ...(Array.isArray(clip?.tags) ? clip.tags : []),
+    ...(Array.isArray(clip?.visualTags) ? clip.visualTags : []),
+    ...(Array.isArray(clip?.emphasisWords) ? clip.emphasisWords : []),
+    ...(Array.isArray(words) ? words.slice(0, 18).map(w => w?.word) : [])
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  let options;
+  if (channel.key === "social_edit") {
+    if (/confess|secret|reveal|truth/.test(context)) {
+      options = ["THE TRUTH COMES OUT", "A SECRET REVEALED", "THAT WAS UNEXPECTED"];
+    } else if (/argument|fight|wrong|disagree|red flag|dealbreaker|controvers/.test(context)) {
+      options = ["WHO'S IN THE WRONG?", "WOULD YOU AGREE?", "THAT'S A RED FLAG"];
+    } else if (/emotion|heart|love|breakup|relationship|dating|chemistry|romance/.test(context)) {
+      options = ["THAT HIT DIFFERENT", "THE FEELING IS REAL", "A MOMENT THAT MATTERS"];
+    } else {
+      options = ["THE CONVERSATION TURNS", "THAT CHANGES THE MOOD", "THERE'S MORE TO THIS"];
+    }
+  } else if (channel.key === "social_table") {
+    if (/food|dish|chef|taste|cook|recipe|restaurant|dining|meal|ingredient/.test(context)) {
+      options = ["WOULD YOU TRY THIS?", "WORTH A TASTE?", "THIS DESERVES A DEBATE"];
+    } else if (/price|expensive|cheap|worth|value|cost/.test(context)) {
+      options = ["WORTH THE HYPE?", "IS IT WORTH IT?", "WHAT WOULD YOU PAY?"];
+    } else if (/debate|opinion|agree|disagree|controvers/.test(context)) {
+      options = ["WHO MAKES THE BETTER POINT?", "LET'S SETTLE THIS", "WHAT'S YOUR TAKE?"];
+    } else {
+      options = ["WHAT'S YOUR TAKE?", "WOULD YOU AGREE?", "LET'S TALK ABOUT THIS"];
+    }
+  } else {
+    if (/action|fight|battle|explosion|war|game|gameplay|trailer|chase/.test(context)) {
+      options = ["THAT ESCALATED FAST", "PURE CHAOS", "DID YOU SEE THAT?"];
+    } else if (/reveal|twist|surprise|secret|unexpected/.test(context)) {
+      options = ["DID YOU CATCH THAT?", "HERE'S THE TWIST", "LOOK AGAIN"];
+    } else if (/visual|cinematic|scene|shot|detail|moment/.test(context)) {
+      options = ["LOOK AT THAT DETAIL", "A SHOT WORTH REPLAYING", "TAKE A CLOSER LOOK"];
+    } else {
+      options = ["WORTH A SECOND LOOK", "DID YOU CATCH THAT?", "LOOK CLOSER"];
+    }
+  }
+
+  // Stable variation: the same clip receives the same hook on every render.
+  const seed = sha256(context || String(clip?.title || channel.key));
+  return options[parseInt(seed.slice(0, 8), 16) % options.length];
+}
+
 function hookTextForClip(clip, words, channel) {
   const candidates = [clip?.hookText, clip?.hook?.text, clip?.topHook, clip?.title];
   let text = "";
+  const genericHook = /^(?:watch this moment|don't miss this moment|dont miss this moment|this moment|wait for it|watch till the end|you need to see this|look at this)$/i;
+
   for (const candidate of candidates) {
     const clean = sanitizeHookCandidate(candidate);
-    if (clean) { text = clean; break; }
+    if (clean && !genericHook.test(clean)) {
+      text = clean;
+      break;
+    }
   }
-  if (!text && Array.isArray(words)) {
-    text = sanitizeHookCandidate(words.slice(0, 9).map(w => cleanCaptionWord(w?.word)).filter(Boolean).join(" "));
-  }
-  if (!text) text = channel.key === "social_table" ? "THIS CHANGES THE WHOLE DISH 👀" : channel.key === "general" ? "DON'T MISS THIS MOMENT" : "WAIT - YOU NEED TO HEAR THIS 👀";
+
+  if (!text) text = dynamicHookFromContext(clip, words, channel);
+
   const maxChars = Math.max(18, Number(CFG.hookMaxChars || 42));
   if (text.length > maxChars) {
     const limit = Math.max(18, maxChars - 1), wordsOut = text.split(/\s+/), kept=[]; let len=0;
@@ -825,7 +877,6 @@ function hookTextForClip(clip, words, channel) {
   }
   return text;
 }
-
 function wrapHookText(text, maxLineChars = 24) {
   const words = String(text || "").trim().split(/\s+/).filter(Boolean);
   if (!words.length) return "";
@@ -1271,14 +1322,10 @@ function beatColors(channel) {
 }
 
 function makeEditorialBeatEvent(beat, channel) {
-  const c = beatColors(channel);
-  const label = channel.key === "social_table" ? "THE SOCIAL TABLE" : "THE SOCIAL EDIT";
-  const x = 540, y = 865;
-  const accent = `{\\p1\\c${c.primary}\\alpha&H20&}m 380 900 l 700 900 l 700 906 l 380 906{\\p0}`;
-  const text = `{\\an5\\pos(${x},${y})\\fad(90,110)\\bord2\\shad0\\1c${c.secondary}\\3c${c.bg}\\fs36}${assText(label)}`;
-  return `Dialogue: 5,${assTime(beat.start)},${assTime(beat.end)},Beat,,0,0,0,,${accent}${text}\n`;
+  // Keep editorial beat timing for diagnostics, but do not burn channel branding
+  // into the middle of the footage.
+  return "";
 }
-
 
 function speakerIndex(speaker) {
   const m = String(speaker || "").match(/(\d+)/);
@@ -1536,7 +1583,7 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
         filters.push(`[${baseVideoLabel}]drawbox=x=3:y=3:w=iw-6:h=ih-6:color=${gold}:t=2[bezel]`);
         filters.push(`[bezel]drawbox=x=48:y=118:w=iw-96:h=1:color=0xD6B36A@${Math.min(goldAlpha,0.30)}:t=fill[headline]`);
         filters.push(`[headline]drawbox=x=48:y=ih-119:w=iw-96:h=1:color=0xD6B36A@${Math.min(goldAlpha,0.30)}:t=fill[bezel2]`);
-        filters.push(`[bezel2]drawtext=text='${channel.watermark}':fontcolor=white@0.84:fontsize=28:fontfile='${fontFile}':x=(w-text_w)/2:y=52:shadowcolor=black@0.45:shadowx=1:shadowy=1[brand]`);
+        filters.push(`[bezel2]null[brand]`); // Channel-name watermark intentionally removed.
       }
     }
     let videoLabel = CFG.brandHeader && CFG.layout !== "crop" ? "brand" : baseVideoLabel;
