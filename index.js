@@ -67,9 +67,10 @@ const CFG = {
 
   premiumVideoHeight: Number(process.env.PREMIUM_VIDEO_HEIGHT || 720),
   premiumVideoFocusX: Number(process.env.PREMIUM_VIDEO_FOCUS_X || 0.5),
-  // Smart Auto-Framing: aim for 85% canvas height, while limiting side crop on landscape sources.
+  // Balanced Auto-Framing: portrait/square can approach 90% canvas height.
+  // Landscape foreground is capped at 30% total side crop (about 15% per side when centered).
   smartFrameHeightRatio: Math.max(0.70, Math.min(0.90, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 0.90))),
-  smartFrameMaxLandscapeCrop: Math.max(0.15, Math.min(0.55, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.38))),
+  smartFrameMaxLandscapeCrop: Math.max(0.10, Math.min(0.40, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.30))),
 
   subtitleMarginV: Number(process.env.SUBTITLE_MARGIN_V || 280),
   watermark: String(process.env.WATERMARK || "true").toLowerCase() !== "false",
@@ -1465,11 +1466,12 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
   console.log(`    [RENDER] Layout: ${layoutMode}`);
   console.log(`    [RENDER] Canvas: ${CFG.width}x${CFG.height}`);
 
-  // Smart Auto-Framing geometry: adapt foreground size to source aspect ratio.
-  // Square/portrait sources target 80-85% canvas height. Landscape sources
-  // use a bounded horizontal crop so the frame does not discard excessive sides.
+  // Balanced Smart Auto-Framing geometry:
+  // portrait/square sources target up to 90% canvas height; landscape sources
+  // keep at least 70% of their scaled width (30% total side crop maximum by default).
+  // The foreground remains vertically centered, leaving safe breathing room above/below.
   const requestedFgHeight = Math.max(2, Math.round((CFG.height * CFG.smartFrameHeightRatio) / 2) * 2);
-  const maxLandscapeCrop = Math.max(0.15, Math.min(0.55, Number(CFG.smartFrameMaxLandscapeCrop || 0.38)));
+  const maxLandscapeCrop = Math.max(0.10, Math.min(0.40, Number(CFG.smartFrameMaxLandscapeCrop || 0.30)));
   const maxScaledWidthForLandscape = CFG.width / (1 - maxLandscapeCrop);
   const naturalScaledWidth = sourceWidth * requestedFgHeight / sourceHeight;
   const smartScaledWidthRaw = aspectRatio > 1.03
@@ -1482,7 +1484,7 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
   const focusX = Math.max(0, Math.min(1, Number(CFG.premiumVideoFocusX ?? 0.5)));
   const cropX = Math.max(0, Math.min(extraCropX, Math.round((extraCropX * focusX) / 2) * 2));
 
-  console.log(`    [FRAMING] Smart target height: ${requestedFgHeight}px (${Math.round(CFG.smartFrameHeightRatio * 100)}% canvas)`);
+  console.log(`    [FRAMING] Balanced target height: ${requestedFgHeight}px (${Math.round(CFG.smartFrameHeightRatio * 100)}% canvas)`);
   console.log(`    [FRAMING] Foreground: ${cropWidth}x${fgHeight}; scaled source width: ${scaledWidth}px`);
   if (scaledWidth > cropWidth) {
     console.log(`    [FRAMING] Horizontal crop: ${Math.round((1 - cropWidth / scaledWidth) * 100)}% total, focusX=${focusX.toFixed(2)}`);
