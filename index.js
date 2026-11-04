@@ -67,9 +67,10 @@ const CFG = {
 
   premiumVideoHeight: Number(process.env.PREMIUM_VIDEO_HEIGHT || 720),
   premiumVideoFocusX: Number(process.env.PREMIUM_VIDEO_FOCUS_X || 0.5),
-  // Smart Auto-Framing: aim for 85% canvas height, while limiting side crop on landscape sources.
-  smartFrameHeightRatio: Math.max(0.70, Math.min(0.90, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 0.85))),
-  smartFrameMaxLandscapeCrop: Math.max(0.15, Math.min(0.55, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.38))),
+  // Balanced Auto-Framing: portrait/square can approach 90% canvas height.
+  // Landscape foreground is capped at 30% total side crop (about 15% per side when centered).
+  smartFrameHeightRatio: Math.max(0.70, Math.min(1.00, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 1.00))),
+  smartFrameMaxLandscapeCrop: Math.max(0.10, Math.min(0.42, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.42))),
 
   subtitleMarginV: Number(process.env.SUBTITLE_MARGIN_V || 280),
   watermark: String(process.env.WATERMARK || "true").toLowerCase() !== "false",
@@ -805,17 +806,83 @@ function sanitizeHookCandidate(value) {
   return text;
 }
 
+function isPlaceholderHook(value) {
+  const text = String(value || "").trim().toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+  return !text || /^(?:visual(?:\s+only)?\s+)?(?:highlight|highlights|clip|moment|scene|video)(?:\s*#?\s*\d+)?$/.test(text)
+    || /^(?:visual highlight|highlight|clip|scene|video)\s*\d+$/.test(text)
+    || /^(?:untitled|sample|test|output|render|candidate)(?:\s*#?\s*\d+)?$/.test(text);
+}
+
+function dynamicHookFromContext(clip, words, channel) {
+  const transcript = Array.isArray(words) ? words.slice(0, 28).map(w => w?.word).filter(Boolean).join(" ") : "";
+  const context = [
+    clip?.reason, clip?.hookReason,
+    clip?.judge?.primaryReason, clip?.editorialValue?.reasons?.join(" "),
+    ...(Array.isArray(clip?.tags) ? clip.tags : []),
+    ...(Array.isArray(clip?.visualTags) ? clip.visualTags : []),
+    ...(Array.isArray(clip?.emphasisWords) ? clip.emphasisWords : []),
+    transcript,
+    // Title is context only when it contains a real descriptive title.
+    ...(isPlaceholderHook(clip?.title) ? [] : [clip?.title])
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  let options;
+  if (channel.key === "social_edit") {
+    if (/confess|secret|reveal|truth|admit|hidden/.test(context)) {
+      options = ["THE TRUTH FINALLY SURFACES", "THAT SECRET CHANGES EVERYTHING", "DID THEY JUST ADMIT IT?"];
+    } else if (/argument|fight|wrong|disagree|red flag|dealbreaker|controvers|blame/.test(context)) {
+      options = ["SO… WHO'S REALLY WRONG?", "WOULD YOU CALL THIS A RED FLAG?", "THIS IS WHERE THEY DISAGREE"];
+    } else if (/emotion|heart|love|breakup|relationship|dating|chemistry|romance/.test(context)) {
+      options = ["THAT HIT A LITTLE TOO CLOSE", "ONE MOMENT CHANGES THE MOOD", "YOU CAN FEEL THE TENSION"];
+    } else {
+      options = ["WAIT—THAT ANSWER SAYS A LOT", "THAT TURNED PERSONAL FAST", "THERE'S MORE BEHIND THAT ANSWER"];
+    }
+  } else if (channel.key === "social_table") {
+    if (/food|dish|chef|taste|cook|recipe|restaurant|dining|meal|ingredient/.test(context)) {
+      options = ["WOULD YOU ACTUALLY TRY THIS?", "THE FIRST BITE TELLS EVERYTHING", "IS THIS GENIUS OR TOO MUCH?"];
+    } else if (/price|expensive|cheap|worth|value|cost|budget/.test(context)) {
+      options = ["WOULD YOU PAY THAT MUCH?", "THE PRICE CHANGES EVERYTHING", "IS IT REALLY WORTH THE MONEY?"];
+    } else if (/debate|opinion|agree|disagree|controvers/.test(context)) {
+      options = ["THERE ARE TWO SIDES TO THIS", "WHICH SIDE MAKES MORE SENSE?", "THIS ONE WILL SPLIT OPINIONS"];
+    } else {
+      options = ["WHAT WOULD YOU CHOOSE?", "THERE'S A LOT TO UNPACK HERE", "WOULD YOU SEE IT THE SAME WAY?"];
+    }
+  } else {
+    if (/explosion|detonat|blast|missile|rocket|fire|burn|crash|impact/.test(context)) {
+      options = ["THE MOMENT EVERYTHING ERUPTS", "DID YOU CATCH THAT IMPACT?", "IT GOES FROM ZERO TO CHAOS"];
+    } else if (/action|fight|battle|war|combat|weapon|soldier|enemy|game|gameplay|trailer|chase/.test(context)) {
+      options = ["THIS IS WHERE IT GETS INTENSE", "WATCH THE ACTION IN THE BACKGROUND", "DID YOU CATCH THAT MOVE?"];
+    } else if (/reveal|twist|surprise|secret|unexpected|mystery/.test(context)) {
+      options = ["THE DETAIL THAT CHANGES THE SCENE", "DID YOU SPOT WHAT JUST CHANGED?", "LOOK AGAIN—THERE'S MORE"];
+    } else if (/visual|cinematic|scene|shot|detail|moment|highlight/.test(context)) {
+      options = ["THE DETAIL YOU MIGHT HAVE MISSED", "A SHOT WORTH A SECOND LOOK", "DID YOU SPOT THAT IN THE FRAME?"];
+    } else {
+      options = ["LOOK CLOSER—DID YOU CATCH IT?", "THIS MOMENT DESERVES A REPLAY", "WATCH WHAT HAPPENS NEXT"];
+    }
+  }
+
+  // Stable per-clip variation; never invent dialogue or claim an unseen event.
+  const seed = sha256(context || String(clip?.id || clip?.start || channel.key));
+  return options[parseInt(seed.slice(0, 8), 16) % options.length];
+}
+
 function hookTextForClip(clip, words, channel) {
   const candidates = [clip?.hookText, clip?.hook?.text, clip?.topHook, clip?.title];
   let text = "";
+  const genericHook = /^(?:watch this moment|don't miss this moment|dont miss this moment|this moment|wait for it|watch till the end|you need to see this|look at this)$/i;
+
   for (const candidate of candidates) {
     const clean = sanitizeHookCandidate(candidate);
-    if (clean) { text = clean; break; }
+    if (clean && !genericHook.test(clean) && !isPlaceholderHook(clean)) {
+      text = clean;
+      break;
+    }
   }
-  if (!text && Array.isArray(words)) {
-    text = sanitizeHookCandidate(words.slice(0, 9).map(w => cleanCaptionWord(w?.word)).filter(Boolean).join(" "));
-  }
-  if (!text) text = channel.key === "social_table" ? "THIS CHANGES THE WHOLE DISH 👀" : channel.key === "general" ? "DON'T MISS THIS MOMENT" : "WAIT - YOU NEED TO HEAR THIS 👀";
+
+  if (!text) text = dynamicHookFromContext(clip, words, channel);
+
   const maxChars = Math.max(18, Number(CFG.hookMaxChars || 42));
   if (text.length > maxChars) {
     const limit = Math.max(18, maxChars - 1), wordsOut = text.split(/\s+/), kept=[]; let len=0;
@@ -825,7 +892,6 @@ function hookTextForClip(clip, words, channel) {
   }
   return text;
 }
-
 function wrapHookText(text, maxLineChars = 24) {
   const words = String(text || "").trim().split(/\s+/).filter(Boolean);
   if (!words.length) return "";
@@ -1271,14 +1337,10 @@ function beatColors(channel) {
 }
 
 function makeEditorialBeatEvent(beat, channel) {
-  const c = beatColors(channel);
-  const label = channel.key === "social_table" ? "THE SOCIAL TABLE" : "THE SOCIAL EDIT";
-  const x = 540, y = 865;
-  const accent = `{\\p1\\c${c.primary}\\alpha&H20&}m 380 900 l 700 900 l 700 906 l 380 906{\\p0}`;
-  const text = `{\\an5\\pos(${x},${y})\\fad(90,110)\\bord2\\shad0\\1c${c.secondary}\\3c${c.bg}\\fs36}${assText(label)}`;
-  return `Dialogue: 5,${assTime(beat.start)},${assTime(beat.end)},Beat,,0,0,0,,${accent}${text}\n`;
+  // Keep editorial beat timing for diagnostics, but do not burn channel branding
+  // into the middle of the footage.
+  return "";
 }
-
 
 function speakerIndex(speaker) {
   const m = String(speaker || "").match(/(\d+)/);
@@ -1418,11 +1480,12 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
   console.log(`    [RENDER] Layout: ${layoutMode}`);
   console.log(`    [RENDER] Canvas: ${CFG.width}x${CFG.height}`);
 
-  // Smart Auto-Framing geometry: adapt foreground size to source aspect ratio.
-  // Square/portrait sources target 80-85% canvas height. Landscape sources
-  // use a bounded horizontal crop so the frame does not discard excessive sides.
+  // Balanced+ Smart Auto-Framing geometry:
+  // portrait/square sources target up to 100% canvas height; landscape sources
+  // allow up to 42% total side crop to enlarge the foreground by roughly 20%.
+  // The foreground remains vertically centered, leaving safe breathing room above/below.
   const requestedFgHeight = Math.max(2, Math.round((CFG.height * CFG.smartFrameHeightRatio) / 2) * 2);
-  const maxLandscapeCrop = Math.max(0.15, Math.min(0.55, Number(CFG.smartFrameMaxLandscapeCrop || 0.38)));
+  const maxLandscapeCrop = Math.max(0.10, Math.min(0.42, Number(CFG.smartFrameMaxLandscapeCrop || 0.42)));
   const maxScaledWidthForLandscape = CFG.width / (1 - maxLandscapeCrop);
   const naturalScaledWidth = sourceWidth * requestedFgHeight / sourceHeight;
   const smartScaledWidthRaw = aspectRatio > 1.03
@@ -1435,7 +1498,7 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
   const focusX = Math.max(0, Math.min(1, Number(CFG.premiumVideoFocusX ?? 0.5)));
   const cropX = Math.max(0, Math.min(extraCropX, Math.round((extraCropX * focusX) / 2) * 2));
 
-  console.log(`    [FRAMING] Smart target height: ${requestedFgHeight}px (${Math.round(CFG.smartFrameHeightRatio * 100)}% canvas)`);
+  console.log(`    [FRAMING] Balanced target height: ${requestedFgHeight}px (${Math.round(CFG.smartFrameHeightRatio * 100)}% canvas)`);
   console.log(`    [FRAMING] Foreground: ${cropWidth}x${fgHeight}; scaled source width: ${scaledWidth}px`);
   if (scaledWidth > cropWidth) {
     console.log(`    [FRAMING] Horizontal crop: ${Math.round((1 - cropWidth / scaledWidth) * 100)}% total, focusX=${focusX.toFixed(2)}`);
@@ -1536,7 +1599,7 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
         filters.push(`[${baseVideoLabel}]drawbox=x=3:y=3:w=iw-6:h=ih-6:color=${gold}:t=2[bezel]`);
         filters.push(`[bezel]drawbox=x=48:y=118:w=iw-96:h=1:color=0xD6B36A@${Math.min(goldAlpha,0.30)}:t=fill[headline]`);
         filters.push(`[headline]drawbox=x=48:y=ih-119:w=iw-96:h=1:color=0xD6B36A@${Math.min(goldAlpha,0.30)}:t=fill[bezel2]`);
-        filters.push(`[bezel2]drawtext=text='${channel.watermark}':fontcolor=white@0.84:fontsize=28:fontfile='${fontFile}':x=(w-text_w)/2:y=52:shadowcolor=black@0.45:shadowx=1:shadowy=1[brand]`);
+        filters.push(`[bezel2]null[brand]`); // Channel-name watermark intentionally removed.
       }
     }
     let videoLabel = CFG.brandHeader && CFG.layout !== "crop" ? "brand" : baseVideoLabel;
