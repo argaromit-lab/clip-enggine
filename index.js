@@ -69,8 +69,8 @@ const CFG = {
   premiumVideoFocusX: Number(process.env.PREMIUM_VIDEO_FOCUS_X || 0.5),
   // Balanced Auto-Framing: portrait/square can approach 90% canvas height.
   // Landscape foreground is capped at 30% total side crop (about 15% per side when centered).
-  smartFrameHeightRatio: Math.max(0.70, Math.min(0.90, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 0.90))),
-  smartFrameMaxLandscapeCrop: Math.max(0.10, Math.min(0.30, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.30))),
+  smartFrameHeightRatio: Math.max(0.70, Math.min(1.00, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 1.00))),
+  smartFrameMaxLandscapeCrop: Math.max(0.10, Math.min(0.42, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.42))),
 
   subtitleMarginV: Number(process.env.SUBTITLE_MARGIN_V || 280),
   watermark: String(process.env.WATERMARK || "true").toLowerCase() !== "false",
@@ -806,51 +806,65 @@ function sanitizeHookCandidate(value) {
   return text;
 }
 
+function isPlaceholderHook(value) {
+  const text = String(value || "").trim().toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+  return !text || /^(?:visual(?:\s+only)?\s+)?(?:highlight|highlights|clip|moment|scene|video)(?:\s*#?\s*\d+)?$/.test(text)
+    || /^(?:visual highlight|highlight|clip|scene|video)\s*\d+$/.test(text)
+    || /^(?:untitled|sample|test|output|render|candidate)(?:\s*#?\s*\d+)?$/.test(text);
+}
+
 function dynamicHookFromContext(clip, words, channel) {
+  const transcript = Array.isArray(words) ? words.slice(0, 28).map(w => w?.word).filter(Boolean).join(" ") : "";
   const context = [
-    clip?.title, clip?.reason, clip?.hookReason,
+    clip?.reason, clip?.hookReason,
     clip?.judge?.primaryReason, clip?.editorialValue?.reasons?.join(" "),
     ...(Array.isArray(clip?.tags) ? clip.tags : []),
     ...(Array.isArray(clip?.visualTags) ? clip.visualTags : []),
     ...(Array.isArray(clip?.emphasisWords) ? clip.emphasisWords : []),
-    ...(Array.isArray(words) ? words.slice(0, 18).map(w => w?.word) : [])
+    transcript,
+    // Title is context only when it contains a real descriptive title.
+    ...(isPlaceholderHook(clip?.title) ? [] : [clip?.title])
   ].filter(Boolean).join(" ").toLowerCase();
 
   let options;
   if (channel.key === "social_edit") {
-    if (/confess|secret|reveal|truth/.test(context)) {
-      options = ["THE TRUTH COMES OUT", "A SECRET REVEALED", "THAT WAS UNEXPECTED"];
-    } else if (/argument|fight|wrong|disagree|red flag|dealbreaker|controvers/.test(context)) {
-      options = ["WHO'S IN THE WRONG?", "WOULD YOU AGREE?", "THAT'S A RED FLAG"];
+    if (/confess|secret|reveal|truth|admit|hidden/.test(context)) {
+      options = ["THE TRUTH FINALLY SURFACES", "THAT SECRET CHANGES EVERYTHING", "DID THEY JUST ADMIT IT?"];
+    } else if (/argument|fight|wrong|disagree|red flag|dealbreaker|controvers|blame/.test(context)) {
+      options = ["SO… WHO'S REALLY WRONG?", "WOULD YOU CALL THIS A RED FLAG?", "THIS IS WHERE THEY DISAGREE"];
     } else if (/emotion|heart|love|breakup|relationship|dating|chemistry|romance/.test(context)) {
-      options = ["THAT HIT DIFFERENT", "THE FEELING IS REAL", "A MOMENT THAT MATTERS"];
+      options = ["THAT HIT A LITTLE TOO CLOSE", "ONE MOMENT CHANGES THE MOOD", "YOU CAN FEEL THE TENSION"];
     } else {
-      options = ["THE CONVERSATION TURNS", "THAT CHANGES THE MOOD", "THERE'S MORE TO THIS"];
+      options = ["WAIT—THAT ANSWER SAYS A LOT", "THAT TURNED PERSONAL FAST", "THERE'S MORE BEHIND THAT ANSWER"];
     }
   } else if (channel.key === "social_table") {
     if (/food|dish|chef|taste|cook|recipe|restaurant|dining|meal|ingredient/.test(context)) {
-      options = ["WOULD YOU TRY THIS?", "WORTH A TASTE?", "THIS DESERVES A DEBATE"];
-    } else if (/price|expensive|cheap|worth|value|cost/.test(context)) {
-      options = ["WORTH THE HYPE?", "IS IT WORTH IT?", "WHAT WOULD YOU PAY?"];
+      options = ["WOULD YOU ACTUALLY TRY THIS?", "THE FIRST BITE TELLS EVERYTHING", "IS THIS GENIUS OR TOO MUCH?"];
+    } else if (/price|expensive|cheap|worth|value|cost|budget/.test(context)) {
+      options = ["WOULD YOU PAY THAT MUCH?", "THE PRICE CHANGES EVERYTHING", "IS IT REALLY WORTH THE MONEY?"];
     } else if (/debate|opinion|agree|disagree|controvers/.test(context)) {
-      options = ["WHO MAKES THE BETTER POINT?", "LET'S SETTLE THIS", "WHAT'S YOUR TAKE?"];
+      options = ["THERE ARE TWO SIDES TO THIS", "WHICH SIDE MAKES MORE SENSE?", "THIS ONE WILL SPLIT OPINIONS"];
     } else {
-      options = ["WHAT'S YOUR TAKE?", "WOULD YOU AGREE?", "LET'S TALK ABOUT THIS"];
+      options = ["WHAT WOULD YOU CHOOSE?", "THERE'S A LOT TO UNPACK HERE", "WOULD YOU SEE IT THE SAME WAY?"];
     }
   } else {
-    if (/action|fight|battle|explosion|war|game|gameplay|trailer|chase/.test(context)) {
-      options = ["THAT ESCALATED FAST", "PURE CHAOS", "DID YOU SEE THAT?"];
-    } else if (/reveal|twist|surprise|secret|unexpected/.test(context)) {
-      options = ["DID YOU CATCH THAT?", "HERE'S THE TWIST", "LOOK AGAIN"];
-    } else if (/visual|cinematic|scene|shot|detail|moment/.test(context)) {
-      options = ["LOOK AT THAT DETAIL", "A SHOT WORTH REPLAYING", "TAKE A CLOSER LOOK"];
+    if (/explosion|detonat|blast|missile|rocket|fire|burn|crash|impact/.test(context)) {
+      options = ["THE MOMENT EVERYTHING ERUPTS", "DID YOU CATCH THAT IMPACT?", "IT GOES FROM ZERO TO CHAOS"];
+    } else if (/action|fight|battle|war|combat|weapon|soldier|enemy|game|gameplay|trailer|chase/.test(context)) {
+      options = ["THIS IS WHERE IT GETS INTENSE", "WATCH THE ACTION IN THE BACKGROUND", "DID YOU CATCH THAT MOVE?"];
+    } else if (/reveal|twist|surprise|secret|unexpected|mystery/.test(context)) {
+      options = ["THE DETAIL THAT CHANGES THE SCENE", "DID YOU SPOT WHAT JUST CHANGED?", "LOOK AGAIN—THERE'S MORE"];
+    } else if (/visual|cinematic|scene|shot|detail|moment|highlight/.test(context)) {
+      options = ["THE DETAIL YOU MIGHT HAVE MISSED", "A SHOT WORTH A SECOND LOOK", "DID YOU SPOT THAT IN THE FRAME?"];
     } else {
-      options = ["WORTH A SECOND LOOK", "DID YOU CATCH THAT?", "LOOK CLOSER"];
+      options = ["LOOK CLOSER—DID YOU CATCH IT?", "THIS MOMENT DESERVES A REPLAY", "WATCH WHAT HAPPENS NEXT"];
     }
   }
 
-  // Stable variation: the same clip receives the same hook on every render.
-  const seed = sha256(context || String(clip?.title || channel.key));
+  // Stable per-clip variation; never invent dialogue or claim an unseen event.
+  const seed = sha256(context || String(clip?.id || clip?.start || channel.key));
   return options[parseInt(seed.slice(0, 8), 16) % options.length];
 }
 
@@ -861,7 +875,7 @@ function hookTextForClip(clip, words, channel) {
 
   for (const candidate of candidates) {
     const clean = sanitizeHookCandidate(candidate);
-    if (clean && !genericHook.test(clean)) {
+    if (clean && !genericHook.test(clean) && !isPlaceholderHook(clean)) {
       text = clean;
       break;
     }
@@ -1466,12 +1480,12 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
   console.log(`    [RENDER] Layout: ${layoutMode}`);
   console.log(`    [RENDER] Canvas: ${CFG.width}x${CFG.height}`);
 
-  // Balanced Smart Auto-Framing geometry:
-  // portrait/square sources target up to 90% canvas height; landscape sources
-  // keep at least 70% of their scaled width (30% total side crop maximum by default).
+  // Balanced+ Smart Auto-Framing geometry:
+  // portrait/square sources target up to 100% canvas height; landscape sources
+  // allow up to 42% total side crop to enlarge the foreground by roughly 20%.
   // The foreground remains vertically centered, leaving safe breathing room above/below.
   const requestedFgHeight = Math.max(2, Math.round((CFG.height * CFG.smartFrameHeightRatio) / 2) * 2);
-  const maxLandscapeCrop = Math.max(0.10, Math.min(0.30, Number(CFG.smartFrameMaxLandscapeCrop || 0.30)));
+  const maxLandscapeCrop = Math.max(0.10, Math.min(0.42, Number(CFG.smartFrameMaxLandscapeCrop || 0.42)));
   const maxScaledWidthForLandscape = CFG.width / (1 - maxLandscapeCrop);
   const naturalScaledWidth = sourceWidth * requestedFgHeight / sourceHeight;
   const smartScaledWidthRaw = aspectRatio > 1.03
