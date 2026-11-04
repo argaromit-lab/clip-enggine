@@ -70,7 +70,7 @@ const CFG = {
   // Balanced Auto-Framing: portrait/square can approach 90% canvas height.
   // Landscape foreground is capped at 30% total side crop (about 15% per side when centered).
   smartFrameHeightRatio: Math.max(0.70, Math.min(0.90, Number(process.env.SMART_FRAME_HEIGHT_RATIO || 0.90))),
-  smartFrameMaxLandscapeCrop: Math.max(0.10, Math.min(0.40, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.30))),
+  smartFrameMaxLandscapeCrop: Math.max(0.10, Math.min(0.30, Number(process.env.SMART_FRAME_MAX_LANDSCAPE_CROP || 0.30))),
 
   subtitleMarginV: Number(process.env.SUBTITLE_MARGIN_V || 280),
   watermark: String(process.env.WATERMARK || "true").toLowerCase() !== "false",
@@ -1471,7 +1471,7 @@ async function render(video, ass, bgm, out, channel, visualVariant = "blur", cli
   // keep at least 70% of their scaled width (30% total side crop maximum by default).
   // The foreground remains vertically centered, leaving safe breathing room above/below.
   const requestedFgHeight = Math.max(2, Math.round((CFG.height * CFG.smartFrameHeightRatio) / 2) * 2);
-  const maxLandscapeCrop = Math.max(0.10, Math.min(0.40, Number(CFG.smartFrameMaxLandscapeCrop || 0.30)));
+  const maxLandscapeCrop = Math.max(0.10, Math.min(0.30, Number(CFG.smartFrameMaxLandscapeCrop || 0.30)));
   const maxScaledWidthForLandscape = CFG.width / (1 - maxLandscapeCrop);
   const naturalScaledWidth = sourceWidth * requestedFgHeight / sourceHeight;
   const smartScaledWidthRaw = aspectRatio > 1.03
